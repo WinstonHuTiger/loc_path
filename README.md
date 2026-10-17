@@ -99,9 +99,10 @@ export LOCPATH_STAGE1_DATA_PATH="$LOCPATH_STAGE1_REPORT_JSON"
 export LOCPATH_STAGE2_DATA_PATH="$LOCPATH_DATA_ROOT/annotations/train/stage2_instructions.json"
 ```
 
-### Paths
+<details>
+<summary><b>Environment variables used by the launchers</b></summary>
 
-The launchers take their paths from environment variables:
+<br>
 
 | Variable | Used by | Meaning |
 |---|---|---|
@@ -113,6 +114,8 @@ The launchers take their paths from environment variables:
 | `LOCPATH_STAGE2_DATA_PATH` | Stage 2 | VQA training JSON |
 | `LOCPATH_STAGE2_PRETRAINED_PTH` | Stage 2 | Stage 1 checkpoint to start from |
 | `LOCPATH_LLM_PATH` | training, inference (optional) | local copy of Qwen2.5-7B-Instruct |
+
+</details>
 
 The directory layout, JSON schema and benchmark file names are described in [docs/data_format.md](docs/data_format.md).
 
