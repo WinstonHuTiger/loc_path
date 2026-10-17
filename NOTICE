@@ -1,0 +1,14 @@
+LoC-Path
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This project includes code derived from the following third-party projects:
+
+1. XTuner (https://github.com/InternLM/xtuner)
+   Copyright (c) OpenMMLab. All rights reserved.
+   Licensed under the Apache License, Version 2.0.
+   The `xtuner/` package is a trimmed and modified copy of XTuner.
+
+2. TorchScale (https://github.com/microsoft/torchscale)
+   Copyright (c) 2022 Microsoft.
+   Licensed under the MIT License.
+   Vendored under `xtuner/model/torchscale/`.
