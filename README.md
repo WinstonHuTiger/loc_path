@@ -277,23 +277,6 @@ uv run bash scripts/evaluate_predictions.sh \
 
 The output directory contains `results.jsonl`, with one line per item, and `summary.json`, with scores per task and per file. `--report-metric` computes only the report metrics, without calling an LLM. `--report-metric-llm` computes the report metrics and LLM-judge scores for the report rows. `--gt-claims-cache-dir DIR` caches the claims extracted from the ground truth, so they are reused across runs. Also available: `--dry-run`, `--limit N` and `--sample N`.
 
-## Repository layout
-
-```
-assets/                      figures used in this README
-scripts/                     launchers for pretraining, Stage 1/2, inference, evaluation
-tools/smoke_test.py          end-to-end GPU test on synthetic data
-tests/                       config and launcher tests
-docs/                        data format (data_format.md) and tests (testing.md)
-data_engine/                 LLM-as-judge and report-metric evaluation
-xtuner/configs/              MAE pretraining, Stage 1, Stage 2 and DeepSpeed configs
-xtuner/model/                LoC-Path model (llava_vis_adapter.py), MAE pretraining,
-                             resampler / TIS / CARA modules, LongNet (torchscale)
-xtuner/dataset/              memory-mapped feature datasets and variable-length collate
-xtuner/engine/hooks/         Top-K / router annealing, evaluation and logging hooks
-xtuner/tools/                training entry point and distributed inference
-```
-
 ## Acknowledgements
 
 We thank the authors of the following projects for releasing their code and data.
