@@ -77,7 +77,7 @@ uv run python -m nltk.downloader wordnet omw-1.4
 
 ### Prepared data
 
-[WinstonHu/LoC-Path-Data](https://huggingface.co/datasets/WinstonHu/LoC-Path-Data) contains the WSI-Bench and BCNB annotations, along with CONCH-v1 tile features and coordinates. It does not include raw slides, image patches or original pathology reports. The WSI-Bench task splits follow WSI-LLaVA, and we removed annotations whose slides have no features. The dataset card lists the counts and the terms of the source data. Those terms and the CONCH license apply in addition to the license of this repository.
+[WinstonHu/LoC-Path-Data](https://huggingface.co/datasets/WinstonHu/LoC-Path-Data) contains the WSI-Bench and BCNB annotations, along with CONCH-v1 tile features and coordinates. The WSI-Bench task splits follow WSI-LLaVA, and we removed annotations whose slides have no features. The dataset card lists the counts and the terms of the source data.
 
 ```bash
 export LOCPATH_DATA_ROOT=$PWD/data/LoC-Path-Data
@@ -98,8 +98,6 @@ export LOCPATH_STAGE1_REPORT_JSON="$LOCPATH_DATA_ROOT/annotations/train/stage1_r
 export LOCPATH_STAGE1_DATA_PATH="$LOCPATH_STAGE1_REPORT_JSON"
 export LOCPATH_STAGE2_DATA_PATH="$LOCPATH_DATA_ROOT/annotations/train/stage2_instructions.json"
 ```
-
-The released JSON files leave out slides without features, so `LOCPATH_UNWANTED_PREFIX_CSV` is not needed. The download size is listed in `metadata/dataset_summary.json`, and the SHA256 of each file in `metadata/feature_manifest.json`.
 
 ### Paths
 
@@ -146,7 +144,7 @@ export NNODES=1 NODE_RANK=0 ADDR=127.0.0.1 PORT=29500
 export DEEPSPEED_CFG=$PWD/xtuner/configs/deepspeed/deepspeed_zero2.json   # ZeRO-2, as in the paper
 ```
 
-On a single GPU, set `NPROC_PER_NODE=1` and leave `DEEPSPEED_CFG` unset. Use `CUDA_VISIBLE_DEVICES` to pick devices. Any extra arguments to a launcher are passed on to `xtuner train`, e.g. `uv run --locked bash scripts/train_stage1.sh --seed 2025`.
+On a single GPU, set `NPROC_PER_NODE=1` and leave `DEEPSPEED_CFG` unset. Use `CUDA_VISIBLE_DEVICES` to pick devices. Any extra arguments to a launcher are passed on to `xtuner train`, e.g. `uv run --locked bash scripts/train_stage1.sh --seed 42`.
 
 The global batch size is `NPROC_PER_NODE × NNODES × batch per GPU × accumulative counts`. If you train on a different number of GPUs, change `ACCUMULATIVE_COUNTS` in the config so that the global batch size stays the same.
 
@@ -276,56 +274,6 @@ uv run bash scripts/evaluate_predictions.sh \
 
 The output directory contains `results.jsonl`, with one line per item, and `summary.json`, with scores per task and per file. `--report-metric` computes only the report metrics, without calling an LLM. `--report-metric-llm` computes the report metrics and LLM-judge scores for the report rows. `--gt-claims-cache-dir DIR` caches the claims extracted from the ground truth, so they are reused across runs. Also available: `--dry-run`, `--limit N` and `--sample N`.
 
-## Testing
-
-From the repository root, after `uv sync --locked`:
-
-```bash
-uv pip check
-uv run --locked xtuner train --help
-uv run --locked python -m unittest discover -s tests -v
-```
-
-The unit tests cover config loading, the visual sampling budgets and the launchers. They also check that a failed Stage 1 stops Stage 2. No model weights are downloaded.
-
-To run the whole pipeline on one GPU with synthetic data:
-
-```bash
-CUDA_VISIBLE_DEVICES=0 uv run --locked python tools/smoke_test.py \
-  --work-dir work_dirs/smoke_tiny
-```
-
-<details>
-<summary><b>More on the smoke test</b></summary>
-
-<br>
-
-The script first generates synthetic inputs:
-- two feature arrays of different lengths (NPY and H5) with grid coordinates;
-- training and test JSON;
-- a tiny random 8-layer Qwen model.
-
-It then runs two iterations each of MAE pretraining, Stage 1 and Stage 2, using the released resampler, NF4 loading, bf16, FlashAttention and LoRA. Compared with real training, only the LLM size, the visual input cap (1,024 tiles), the number of workers, gradient accumulation and run length are smaller. The script checks that the losses are finite, that checkpoints are saved, and that Stage 2 updates the parameters and LoRA weights. It then generates predictions from the Stage 2 checkpoint and runs the closed-ended evaluation. `smoke_result.json` is written only if every check passes. Use a new, empty `--work-dir` for each run.
-
-With the real Qwen2.5-7B base model (`--llm-path` also accepts a local model directory):
-
-```bash
-CUDA_VISIBLE_DEVICES=0 uv run --locked python tools/smoke_test.py \
-  --work-dir work_dirs/smoke_qwen7b \
-  --llm-path Qwen/Qwen2.5-7B-Instruct
-```
-
-On two GPUs with DeepSpeed ZeRO-2:
-
-```bash
-CUDA_VISIBLE_DEVICES=0,1 uv run --locked python tools/smoke_test.py \
-  --work-dir work_dirs/smoke_zero2 --nproc 2 --deepspeed
-```
-
-These tests only check that the code runs end to end. They do not reproduce the paper's numbers, full-length training or full 61,440-tile batches.
-
-</details>
-
 ## Repository layout
 
 ```
@@ -333,7 +281,7 @@ assets/                      figures used in this README
 scripts/                     launchers for pretraining, Stage 1/2, inference, evaluation
 tools/smoke_test.py          end-to-end GPU test on synthetic data
 tests/                       config and launcher tests
-docs/data_format.md          feature and JSON format
+docs/                        data format (data_format.md) and tests (testing.md)
 data_engine/                 LLM-as-judge and report-metric evaluation
 xtuner/configs/              MAE pretraining, Stage 1, Stage 2 and DeepSpeed configs
 xtuner/model/                LoC-Path model (llava_vis_adapter.py), MAE pretraining,
