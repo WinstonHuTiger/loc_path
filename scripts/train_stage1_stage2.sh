@@ -4,6 +4,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STAGE1_WORK_DIR="${STAGE1_WORK_DIR:-$REPO_ROOT/work_dirs/stage_1_vis_adapter_topk_anneal_longnet_ctx_language_add_router_kl}"
 STAGE2_WORK_DIR="${STAGE2_WORK_DIR:-$REPO_ROOT/work_dirs/stage_2_vis_adapter_topk_anneal_longnet_ctx_language_add_router_kl_mass}"
+STAGE1_CONFIG="${STAGE1_CONFIG:-$REPO_ROOT/xtuner/configs/vis_adapter/stage_1_vis_adapter_topk_anneal_longnet_ctx_language_add_router_kl.py}"
+STAGE2_CONFIG="${STAGE2_CONFIG:-$REPO_ROOT/xtuner/configs/vis_adapter/stage_2_vis_adapter_topk_anneal_longnet_ctx_language_add_router_kl_mass.py}"
 
 : "${LOCPATH_RESAMPLER_CKPT:=${SLIDECHAT_RESAMPLER_CKPT:-}}"
 : "${LOCPATH_FEATURE_ROOT:=${SLIDECHAT_FEATURE_ROOT:-}}"
@@ -37,7 +39,7 @@ find_latest_pth() {
 }
 
 WORK_DIR="$STAGE1_WORK_DIR" \
-CONFIG="$REPO_ROOT/xtuner/configs/vis_adapter/stage_1_vis_adapter_topk_anneal_longnet_ctx_language_add_router_kl.py" \
+CONFIG="$STAGE1_CONFIG" \
 DEEPSPEED_CFG="${DEEPSPEED_CFG:-}" \
 bash "$REPO_ROOT/scripts/train_stage1.sh" "$@"
 
@@ -49,6 +51,6 @@ fi
 
 LOCPATH_STAGE2_PRETRAINED_PTH="$STAGE1_CKPT" \
 WORK_DIR="$STAGE2_WORK_DIR" \
-CONFIG="$REPO_ROOT/xtuner/configs/vis_adapter/stage_2_vis_adapter_topk_anneal_longnet_ctx_language_add_router_kl_mass.py" \
+CONFIG="$STAGE2_CONFIG" \
 DEEPSPEED_CFG="${DEEPSPEED_CFG:-}" \
 bash "$REPO_ROOT/scripts/train_stage2.sh" "$@"

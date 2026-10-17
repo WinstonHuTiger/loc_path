@@ -112,9 +112,11 @@ class ConfigTest(unittest.TestCase):
     def test_configs_and_visual_budget(self) -> None:
         paths = list((ROOT / 'xtuner/configs/vis_adapter').glob('stage_*.py'))
         paths += list((ROOT / 'xtuner/configs/mae_pretraining').glob('*.py'))
-        self.assertEqual(len(paths), 3)
+        self.assertEqual(len(paths), 6)
         for path in paths:
             with self.subTest(config=path.name):
+                n_latents = 128 if path.stem.endswith('_l128') else 256
+                self.assertIn(f'n_latents={n_latents},', path.read_text())
                 cfg = load_config(str(path))
                 ast.parse(cfg.pretty_text)
                 copy.deepcopy(cfg)

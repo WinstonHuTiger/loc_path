@@ -141,14 +141,15 @@ Run CONCH v1 with the contrastive projection and output normalization turned off
 
 ## Pretrained weights
 
-[WinstonHu/LoC-Path](https://huggingface.co/WinstonHu/LoC-Path) contains the MAE, Stage 1 and Stage 2 checkpoints of the L = 128 / M = 96 model, together with matching configs. The efficiency numbers in the paper are reported for this model. The configs under `xtuner/configs/` use L = 256, so use the configs that come with the weights.
+[WinstonHu/LoC-Path](https://huggingface.co/WinstonHu/LoC-Path) contains the MAE, Stage 1 and Stage 2 checkpoints of the L = 128 / M = 96 model. The paper's efficiency numbers are reported for this model.
 
-| File | Content |
-|---|---|
-| `checkpoints/mae.pth` | MAE-pretrained resampler with its decoder (100k iterations) |
-| `checkpoints/stage1.pth` | visual modules after Stage 1 |
-| `checkpoints/stage2.pth` | visual modules and LoRA after Stage 2, used for inference |
-| `configs/locpath_{mae,stage1,stage2}.py` | configs for each stage (L = 128) |
+| File | Content | Config in this repository |
+|---|---|---|
+| `checkpoints/mae.pth` | MAE-pretrained resampler with its decoder (100k iterations) | `mae_feature_pretrain_longnet_ctx_encoder_l128.py` |
+| `checkpoints/stage1.pth` | visual modules after Stage 1 | `stage_1_vis_adapter_topk_anneal_longnet_ctx_language_add_router_kl_l128.py` |
+| `checkpoints/stage2.pth` | visual modules and LoRA after Stage 2, used for inference | `stage_2_vis_adapter_topk_anneal_longnet_ctx_language_add_router_kl_mass_l128.py` |
+
+The repository has two sets of configs that differ only in the number of latents. The ones ending in `_l128` match the released weights. The ones without a suffix use L = 256 and are the launchers' defaults. A checkpoint only loads with a config that has the same L. The HF repository also includes copies of the `_l128` configs (`configs/locpath_*.py`).
 
 ```bash
 export LOCPATH_MODEL_ROOT=$PWD/pretrained_models/LoC-Path
@@ -168,7 +169,7 @@ The Qwen2.5-7B-Instruct base model is not included. It is downloaded from Huggin
 
 ## Training
 
-Training has three stages. Each stage has a launcher in `scripts/` and a config in `xtuner/configs/`. First set the GPU layout:
+Training has three stages. Each stage has a launcher in `scripts/` and a config in `xtuner/configs/`. The launchers use the L = 256 configs by default. To train the L = 128 model, set `CONFIG` to the matching `_l128` config for each stage, or set `STAGE1_CONFIG` and `STAGE2_CONFIG` for `train_stage1_stage2.sh`. First set the GPU layout:
 
 ```bash
 export NPROC_PER_NODE=4          # GPUs on this node
@@ -262,7 +263,7 @@ uv run bash scripts/test_vis_adapter.sh --sample_num 61440 --max_new_tokens 512
 To evaluate the released weights on the released data (NPY features):
 
 ```bash
-export CONFIG="$LOCPATH_MODEL_ROOT/configs/locpath_stage2.py"
+export CONFIG=$PWD/xtuner/configs/vis_adapter/stage_2_vis_adapter_topk_anneal_longnet_ctx_language_add_router_kl_mass_l128.py
 export CHECKPOINT="$LOCPATH_MODEL_ROOT/checkpoints/stage2.pth"
 export DATA_DIR="$LOCPATH_DATA_ROOT/annotations/test/wsi_bench"
 export FEATURE_ROOT="$LOCPATH_FEATURE_ROOT"
@@ -272,7 +273,7 @@ uv run --locked bash scripts/test_vis_adapter.sh \
 
 For BCNB, set `DATA_DIR=$LOCPATH_DATA_ROOT/annotations/test/external` and run the same command. The BCNB records point to CSV feature files under `FEATURE_ROOT`.
 
-The router schedule is not saved in the checkpoint, so pass `--router-top-m 96` to use the paper's final routing budget. The Stage 2 checkpoint already contains the visual weights, and inference does not need the MAE or Stage 1 checkpoints. It does need the Qwen base model: set `LOCPATH_LLM_PATH` to a local copy, otherwise `Qwen/Qwen2.5-7B-Instruct` is downloaded from Hugging Face. The config must match the checkpoint; the released weights need `CONFIG` set as above.
+The router schedule is not saved in the checkpoint, so pass `--router-top-m 96` to use the paper's final routing budget. The Stage 2 checkpoint already contains the visual weights, and inference does not need the MAE or Stage 1 checkpoints. It does need the Qwen base model: set `LOCPATH_LLM_PATH` to a local copy, otherwise `Qwen/Qwen2.5-7B-Instruct` is downloaded from Hugging Face. The config must have the same L as the checkpoint. Without `CONFIG`, the script uses the L = 256 Stage 2 config.
 
 Other options include `--sample_num` (maximum tiles per slide), `--sample_strategy {linspace,random}` and `--decoding` (greedy by default). Set `CONFIG=...` to use a different config.
 
