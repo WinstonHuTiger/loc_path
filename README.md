@@ -73,6 +73,8 @@ METEOR, one of the report metrics, needs NLTK's WordNet data:
 uv run python -m nltk.downloader wordnet omw-1.4
 ```
 
+To check the installation, see [docs/testing.md](docs/testing.md).
+
 ## Data
 
 ### Prepared data
