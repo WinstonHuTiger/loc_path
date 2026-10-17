@@ -182,7 +182,7 @@ Config: `xtuner/configs/vis_adapter/stage_1_vis_adapter_topk_anneal_longnet_ctx_
 
 ### Stage 2: instruction tuning on VQA
 
-LoRA is added to the LLM, and the last resampler layer, the latent queries and the input projection are unfrozen. The model is trained on all WSI-Bench VQA pairs (lr 2e-5), with an additional pairwise ranking loss for TIS. `RouterAnnealHook` anneals the routing budget and the TIS temperatures, with milestones at 7k and 14k iterations, and ends at M = 96.
+LoRA is added to the LLM, and the last resampler layer, the latent queries and the input projection are unfrozen. The model is trained on all WSI-Bench VQA pairs (lr 2e-5), with an additional pairwise ranking loss for TIS.
 
 ```bash
 export LOCPATH_FEATURE_ROOT=/path/to/features/conch_v1
