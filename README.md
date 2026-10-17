@@ -1,12 +1,12 @@
 # LoC-Path: Learning to Compress for Pathology Multimodal Large Language Models
 
-[Paper](https://arxiv.org/abs/2512.05391) | [Data](https://huggingface.co/datasets/WinstonHu/LoC-Path-Data)
+[Paper](https://arxiv.org/abs/2512.05391) | [Data](https://huggingface.co/datasets/WinstonHu/LoC-Path-Data) | [Weights](https://huggingface.co/WinstonHu/LoC-Path)
 
 Official code for training, inference and evaluation of LoC-Path.
 
 ## Overview
 
-A whole slide image (WSI) encoded at the tile level gives thousands to tens of thousands of tokens, and many of them are near-duplicates. Slide-level MLLMs such as WSI-LLaVA and SlideChat feed all of these tokens to the LLM as a long visual prefix. LoC-Path compresses the slide first. A Sparse Token Merger (STM) merges neighboring tiles, and an MAE-pretrained resampler compresses the slide into 256 latents. A Token Importance Scorer (TIS) then selects the 96 latents most relevant to the question, and Cross-Attention Routing Adapters (CARA) inject them into LLM layers 1, 3, 5 and 7. The visual tokens never enter the LLM's input sequence.
+A whole slide image (WSI) encoded at the tile level gives thousands to tens of thousands of tokens, and many of them are near-duplicates. Slide-level MLLMs such as WSI-LLaVA and SlideChat feed all of these tokens to the LLM as a long visual prefix. LoC-Path compresses the slide first. A Sparse Token Merger (STM) merges neighboring tiles, and an MAE-pretrained resampler compresses the slide into a fixed number of latents (L = 256 or 128). A Token Importance Scorer (TIS) then selects the 96 latents most relevant to the question, and Cross-Attention Routing Adapters (CARA) inject them into LLM layers 1, 3, 5 and 7. The visual tokens never enter the LLM's input sequence.
 
 Compared with prior slide-level MLLMs, this reduces inference TFLOPs by 97% and inference memory by 39%, with competitive results on WSI-Bench, Slide-Bench and Path-Bench.
 
@@ -139,6 +139,33 @@ Run CONCH v1 with the contrastive projection and output normalization turned off
 
 </details>
 
+## Pretrained weights
+
+[WinstonHu/LoC-Path](https://huggingface.co/WinstonHu/LoC-Path) contains the MAE, Stage 1 and Stage 2 checkpoints of the L = 128 / M = 96 model, together with matching configs. The efficiency numbers in the paper are reported for this model. The configs under `xtuner/configs/` use L = 256, so use the configs that come with the weights.
+
+| File | Content |
+|---|---|
+| `checkpoints/mae.pth` | MAE-pretrained resampler with its decoder (100k iterations) |
+| `checkpoints/stage1.pth` | visual modules after Stage 1 |
+| `checkpoints/stage2.pth` | visual modules and LoRA after Stage 2, used for inference |
+| `configs/locpath_{mae,stage1,stage2}.py` | configs for each stage (L = 128) |
+
+```bash
+export LOCPATH_MODEL_ROOT=$PWD/pretrained_models/LoC-Path
+uv run --locked python - <<'PY'
+import os
+from huggingface_hub import snapshot_download
+
+snapshot_download(
+    repo_id="WinstonHu/LoC-Path",
+    revision="v1.0",
+    local_dir=os.environ["LOCPATH_MODEL_ROOT"],
+)
+PY
+```
+
+The Qwen2.5-7B-Instruct base model is not included. It is downloaded from Hugging Face the first time it is needed, or you can set `LOCPATH_LLM_PATH` to a local copy.
+
 ## Training
 
 Training has three stages. Each stage has a launcher in `scripts/` and a config in `xtuner/configs/`. First set the GPU layout:
@@ -232,18 +259,20 @@ export NPROC_PER_NODE=4
 uv run bash scripts/test_vis_adapter.sh --sample_num 61440 --max_new_tokens 512
 ```
 
-For the released data, read the NPY features instead:
+To evaluate the released weights on the released data (NPY features):
 
 ```bash
+export CONFIG="$LOCPATH_MODEL_ROOT/configs/locpath_stage2.py"
+export CHECKPOINT="$LOCPATH_MODEL_ROOT/checkpoints/stage2.pth"
 export DATA_DIR="$LOCPATH_DATA_ROOT/annotations/test/wsi_bench"
 export FEATURE_ROOT="$LOCPATH_FEATURE_ROOT"
 uv run --locked bash scripts/test_vis_adapter.sh \
-  --image_feature_suffix .npy --sample_num 61440 --router-top-m 96
+  --image_feature_suffix .npy --sample_num 61440 --router-top-m 96 --max_new_tokens 512
 ```
 
 For BCNB, set `DATA_DIR=$LOCPATH_DATA_ROOT/annotations/test/external` and run the same command. The BCNB records point to CSV feature files under `FEATURE_ROOT`.
 
-The router schedule is not saved in the checkpoint, so pass `--router-top-m 96` to use the paper's final routing budget. The Stage 2 checkpoint already contains the visual weights, and inference does not need the MAE or Stage 1 checkpoints. It does need the Qwen base model: set `LOCPATH_LLM_PATH` to a local copy, otherwise `Qwen/Qwen2.5-7B-Instruct` is downloaded from Hugging Face.
+The router schedule is not saved in the checkpoint, so pass `--router-top-m 96` to use the paper's final routing budget. The Stage 2 checkpoint already contains the visual weights, and inference does not need the MAE or Stage 1 checkpoints. It does need the Qwen base model: set `LOCPATH_LLM_PATH` to a local copy, otherwise `Qwen/Qwen2.5-7B-Instruct` is downloaded from Hugging Face. The config must match the checkpoint; the released weights need `CONFIG` set as above.
 
 Other options include `--sample_num` (maximum tiles per slide), `--sample_strategy {linspace,random}` and `--decoding` (greedy by default). Set `CONFIG=...` to use a different config.
 
