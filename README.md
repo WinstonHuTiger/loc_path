@@ -6,7 +6,7 @@ Official code for training, inference and evaluation of LoC-Path.
 
 ## Overview
 
-A gigapixel slide usually turns into tens of thousands of tile tokens, but most of them carry the same information. Slide-level MLLMs such as WSI-LLaVA and SlideChat still pass every one of these tokens through the LLM. This causes the training cost extremely high. LoC-Path compresses the slide first. A Sparse Token Merger (STM) merges neighboring tiles, and an MAE-pretrained resampler compresses the slide into a fixed number of latents. A Token Importance Scorer (TIS) then selects the 96 latents most relevant to the question, and Cross-Attention Routing Adapters (CARA) inject them into LLM layers 1, 3, 5 and 7. The visual tokens never enter the LLM's input sequence.
+A gigapixel slide usually turns into tens of thousands of tile tokens, but most of them carry the same information. Slide-level MLLMs such as WSI-LLaVA and SlideChat still pass every one of these tokens through the LLM. This makes training very expensive. LoC-Path compresses the slide first. A Sparse Token Merger (STM) merges neighboring tiles, and an MAE-pretrained resampler compresses the slide into a fixed number of latents. A Token Importance Scorer (TIS) then selects the 96 latents most relevant to the question, and Cross-Attention Routing Adapters (CARA) inject them into LLM layers 1, 3, 5 and 7. The visual tokens never enter the LLM's input sequence.
 
 Compared with prior slide-level MLLMs, this reduces inference TFLOPs by 97% and inference memory by 39%, with competitive results on WSI-Bench, Slide-Bench and Path-Bench.
 
@@ -157,7 +157,6 @@ PY
 
 The Qwen2.5-7B-Instruct base model is not included. It is downloaded from Hugging Face the first time it is needed, or you can set `LOCPATH_LLM_PATH` to a local copy.
 
-
 ## Inference
 
 `scripts/test_vis_adapter.sh` runs distributed generation over every `*_test.json` file in a folder and writes one prediction per question.
@@ -188,91 +187,14 @@ For BCNB, set `DATA_DIR=$LOCPATH_DATA_ROOT/annotations/test/external` and run th
 
 A few things to keep in mind when running inference:
 
-- The checkpoint doesn't store the TIS's selection schedule, so add `--router-top-m 96` to get the budget we used in the paper.
+- The checkpoint doesn't store the TIS selection schedule, so add `--router-top-m 96` to get the budget we used in the paper.
 - The Stage 2 checkpoint is all you need on the LoC-Path side, since it already carries the visual weights. You still need the Qwen base model: point `LOCPATH_LLM_PATH` to a local copy, or let the script download `Qwen/Qwen2.5-7B-Instruct` from Hugging Face.
 - The config and the checkpoint must use the same L. If you leave `CONFIG` unset, the script falls back to the L = 256 config, which won't load the released L = 128 weights.
 - Other options include `--sample_num` (maximum tiles per slide), `--sample_strategy {linspace,random}` and `--decoding` (greedy by default). Set `CONFIG=...` to use a different config.
 
-
-## Training
-
-Training has three stages. Each stage has a launcher in `scripts/` and a config in `xtuner/configs/`. The launchers use the L = 256 configs by default. To train the L = 128 model, set `CONFIG` to the matching `_l128` config for each stage, or set `STAGE1_CONFIG` and `STAGE2_CONFIG` for `train_stage1_stage2.sh`. First set the GPU layout:
-
-```bash
-export NPROC_PER_NODE=4          # GPUs on one node
-export NNODES=1 NODE_RANK=0 ADDR=127.0.0.1 PORT=29500
-export DEEPSPEED_CFG=$PWD/xtuner/configs/deepspeed/deepspeed_zero2.json
-```
-
-On a single GPU, set `NPROC_PER_NODE=1` and leave `DEEPSPEED_CFG` unset. Use `CUDA_VISIBLE_DEVICES` to pick devices. Any extra arguments to a launcher are passed on to `xtuner train`, e.g. `uv run --locked bash scripts/train_stage1.sh --seed 42`.
-
-The global batch size is `NPROC_PER_NODE × NNODES × batch per GPU × accumulative counts`. If you train on a different number of GPUs, change `ACCUMULATIVE_COUNTS` in the config so that the global batch size stays the same.
-
-### MAE resampler pretraining
-
-The resampler is trained to compress tile features into 256 latents by reconstructing masked tiles (mask ratio 70%). Training runs for 100k iterations with AdamW (lr 1e-4, 3% warmup, cosine schedule), and Top-K is annealed from (128, 64) to (64, 32). Two extra losses are used: a coverage loss so that every tile is attended by some latent, and a diversity loss that keeps latents from collapsing onto each other.
-
-```bash
-export LOCPATH_FEATURE_ROOT=/path/to/features/conch_v1
-export LOCPATH_STAGE1_REPORT_JSON=/path/to/report.json
-export WORK_DIR=$PWD/work_dirs/mae_resampler
-
-uv run bash scripts/train_resampler_pretrain.sh
-```
-
-Config: `xtuner/configs/mae_pretraining/mae_feature_pretrain_longnet_ctx_encoder.py`
-
-### Stage 1: alignment on reports
-
-
-```bash
-export LOCPATH_FEATURE_ROOT=/path/to/features/conch_v1
-export LOCPATH_RESAMPLER_CKPT=/path/to/mae_resampler.pth
-export LOCPATH_STAGE1_DATA_PATH=/path/to/stage1_dataset.json
-export WORK_DIR=$PWD/work_dirs/stage1
-
-uv run bash scripts/train_stage1.sh
-```
-
-Config: `xtuner/configs/vis_adapter/stage_1_vis_adapter_topk_anneal_longnet_ctx_language_add_router_kl.py`
-
-### Stage 2: instruction tuning on VQA
-
-
-```bash
-export LOCPATH_FEATURE_ROOT=/path/to/features/conch_v1
-export LOCPATH_RESAMPLER_CKPT=/path/to/mae_resampler.pth
-export LOCPATH_STAGE2_DATA_PATH=/path/to/stage2_dataset.json
-export LOCPATH_STAGE2_PRETRAINED_PTH=/path/to/stage1_checkpoint.pth
-export WORK_DIR=$PWD/work_dirs/stage2
-
-uv run bash scripts/train_stage2.sh
-```
-
-Config: `xtuner/configs/vis_adapter/stage_2_vis_adapter_topk_anneal_longnet_ctx_language_add_router_kl_mass.py`
-
-`scripts/train_stage1_stage2.sh` runs both stages in sequence. Stage 2 starts from the latest Stage 1 checkpoint and is skipped if Stage 1 fails.
-
-```bash
-export STAGE1_WORK_DIR=$PWD/work_dirs/stage1
-export STAGE2_WORK_DIR=$PWD/work_dirs/stage2
-uv run bash scripts/train_stage1_stage2.sh
-```
-
-<details>
-<summary><b>Checkpoints and resuming</b></summary>
-
-<br>
-
-A run starts from scratch unless you pass `--resume /path/to/checkpoint`, or `--resume auto` to read `WORK_DIR/last_checkpoint`. Use a new `WORK_DIR` for each experiment.
-
-With DeepSpeed, a checkpoint is a directory whose name ends in `.pth`. Keep the whole directory if you want to resume from it. With ZeRO-1/2, the directory also contains `locpath_model.pth`, which has the LoRA weights and all visual weights, frozen ones included. That file is enough to start Stage 2 or to run inference, and the loader picks it up automatically when given the directory. Older ZeRO checkpoints without this file may lack the frozen visual weights. ZeRO-3 is not compatible with 4-bit training, so it is not recommended.
-
-</details>
-
 ## Evaluation
 
-`scripts/evaluate_predictions.sh` scores predictions task by task on WSI-Bench (morphology, diagnosis, treatment planning, report generation), Slide-Bench/BCNB. Closed-ended questions are scored by accuracy. Open-ended answers are scored by an LLM judge with WSI-Precision and WSI-Relevance from [WSI-LLaVA](https://github.com/XinhengLyu/WSI-LLaVA), with their provided prompts and rubric. Report-generation tasks are also scored with traditional NLU metrics.
+`scripts/evaluate_predictions.sh` scores predictions task by task on WSI-Bench (morphology, diagnosis, treatment planning, report generation) and Slide-Bench/BCNB. Closed-ended questions are scored by accuracy. Open-ended answers are scored by an LLM judge with WSI-Precision and WSI-Relevance from [WSI-LLaVA](https://github.com/XinhengLyu/WSI-LLaVA), with their provided prompts and rubric. Report-generation tasks are also scored with standard NLG metrics (BLEU, ROUGE-L, METEOR).
 
 The paper uses GPT-4o as the judge, with the API's default sampling settings:
 
@@ -301,6 +223,80 @@ uv run bash scripts/evaluate_predictions.sh \
 ```
 
 The output directory contains `results.jsonl`, with one line per item, and `summary.json`, with scores per task and per file. `--report-metric` computes only the report metrics, without calling an LLM. `--report-metric-llm` computes the report metrics and LLM-judge scores for the report rows. `--gt-claims-cache-dir DIR` caches the claims extracted from the ground truth, so they are reused across runs. Also available: `--dry-run`, `--limit N` and `--sample N`.
+
+## Training
+
+Training has three stages. Each stage has a launcher in `scripts/` and a config in `xtuner/configs/`. The launchers use the L = 256 configs by default. To train the L = 128 model, set `CONFIG` to the matching `_l128` config for each stage, or set `STAGE1_CONFIG` and `STAGE2_CONFIG` for `train_stage1_stage2.sh`. First set the GPU layout:
+
+```bash
+export NPROC_PER_NODE=4          # GPUs on one node
+export NNODES=1 NODE_RANK=0 ADDR=127.0.0.1 PORT=29500
+export DEEPSPEED_CFG=$PWD/xtuner/configs/deepspeed/deepspeed_zero2.json
+```
+
+On a single GPU, set `NPROC_PER_NODE=1` and leave `DEEPSPEED_CFG` unset. Use `CUDA_VISIBLE_DEVICES` to pick devices. Any extra arguments to a launcher are passed on to `xtuner train`, e.g. `uv run --locked bash scripts/train_stage1.sh --seed 42`.
+
+The global batch size is `NPROC_PER_NODE × NNODES × batch per GPU × accumulative counts`. If you train on a different number of GPUs, change `ACCUMULATIVE_COUNTS` in the config so that the global batch size stays the same.
+
+### MAE resampler pretraining
+
+The resampler is trained to compress tile features into a fixed number of latents (256 by default) by reconstructing masked tiles (mask ratio 70%). Training runs for 100k iterations with AdamW (lr 1e-4, 3% warmup, cosine schedule), and Top-K is annealed from (128, 64) to (64, 32). Two extra losses are used: a coverage loss so that every tile is attended by some latent, and a diversity loss that keeps latents from collapsing onto each other.
+
+```bash
+export LOCPATH_FEATURE_ROOT=/path/to/features/conch_v1
+export LOCPATH_STAGE1_REPORT_JSON=/path/to/report.json
+export WORK_DIR=$PWD/work_dirs/mae_resampler
+
+uv run bash scripts/train_resampler_pretrain.sh
+```
+
+Config: `xtuner/configs/mae_pretraining/mae_feature_pretrain_longnet_ctx_encoder.py`
+
+### Stage 1: alignment on reports
+
+```bash
+export LOCPATH_FEATURE_ROOT=/path/to/features/conch_v1
+export LOCPATH_RESAMPLER_CKPT=/path/to/mae_resampler.pth
+export LOCPATH_STAGE1_DATA_PATH=/path/to/stage1_dataset.json
+export WORK_DIR=$PWD/work_dirs/stage1
+
+uv run bash scripts/train_stage1.sh
+```
+
+Config: `xtuner/configs/vis_adapter/stage_1_vis_adapter_topk_anneal_longnet_ctx_language_add_router_kl.py`
+
+### Stage 2: instruction tuning on VQA
+
+```bash
+export LOCPATH_FEATURE_ROOT=/path/to/features/conch_v1
+export LOCPATH_RESAMPLER_CKPT=/path/to/mae_resampler.pth
+export LOCPATH_STAGE2_DATA_PATH=/path/to/stage2_dataset.json
+export LOCPATH_STAGE2_PRETRAINED_PTH=/path/to/stage1_checkpoint.pth
+export WORK_DIR=$PWD/work_dirs/stage2
+
+uv run bash scripts/train_stage2.sh
+```
+
+Config: `xtuner/configs/vis_adapter/stage_2_vis_adapter_topk_anneal_longnet_ctx_language_add_router_kl_mass.py`
+
+`scripts/train_stage1_stage2.sh` runs both stages in sequence. Stage 2 starts from the latest Stage 1 checkpoint and is skipped if Stage 1 fails.
+
+```bash
+export STAGE1_WORK_DIR=$PWD/work_dirs/stage1
+export STAGE2_WORK_DIR=$PWD/work_dirs/stage2
+uv run bash scripts/train_stage1_stage2.sh
+```
+
+<details>
+<summary><b>Checkpoints and resuming</b></summary>
+
+<br>
+
+A run starts from scratch unless you pass `--resume /path/to/checkpoint`, or `--resume auto` to read `WORK_DIR/last_checkpoint`. Use a new `WORK_DIR` for each experiment.
+
+With DeepSpeed, a checkpoint is a directory whose name ends in `.pth`. Keep the whole directory if you want to resume from it. With ZeRO-1/2, the directory also contains `locpath_model.pth`, which has the LoRA weights and all visual weights, frozen ones included. That file is enough to start Stage 2 or to run inference, and the loader picks it up automatically when given the directory. Older ZeRO checkpoints without this file may lack the frozen visual weights. ZeRO-3 is not supported: we only tested 4-bit training with ZeRO-2, and `locpath_model.pth` is not exported under ZeRO-3.
+
+</details>
 
 ## Acknowledgements
 

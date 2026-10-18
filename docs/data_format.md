@@ -37,7 +37,7 @@ features/conch_v1/
 - The `_224x224_b20_t15` directory suffix is a lookup convention in the released
   configs, not a command to extract features. If changing your directory layout,
   also update `identifier` in the dataset config and `--identifier` for inference.
-- Stage 0 scans `*_features.npy` recursively and selects slides listed in the
+- MAE pretraining scans `*_features.npy` recursively and selects slides listed in the
   report JSON. Stage 1/2 resolve each JSON image stub into its cancer directory.
   The original extension in the JSON stub does not select the training backend.
 - The stage configs cap sampled visual features at 61,440 tiles using `linspace`.
