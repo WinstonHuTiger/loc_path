@@ -6,7 +6,7 @@ Official code for training, inference and evaluation of LoC-Path.
 
 ## Overview
 
-A whole slide image (WSI) encoded at the tile level gives thousands to tens of thousands of tokens, and many of them are near-duplicates. Slide-level MLLMs such as WSI-LLaVA and SlideChat feed all of these tokens to the LLM as a long visual prefix. LoC-Path compresses the slide first. A Sparse Token Merger (STM) merges neighboring tiles, and an MAE-pretrained resampler compresses the slide into a fixed number of latents (L = 256 or 128). A Token Importance Scorer (TIS) then selects the 96 latents most relevant to the question, and Cross-Attention Routing Adapters (CARA) inject them into LLM layers 1, 3, 5 and 7. The visual tokens never enter the LLM's input sequence.
+A gigapixel slide usually turns into tens of thousands of tile tokens, but most of them carry the same information. Slide-level MLLMs such as WSI-LLaVA and SlideChat still pass every one of these tokens through the LLM. This causes the training cost extremely high. LoC-Path compresses the slide first. A Sparse Token Merger (STM) merges neighboring tiles, and an MAE-pretrained resampler compresses the slide into a fixed number of latents. A Token Importance Scorer (TIS) then selects the 96 latents most relevant to the question, and Cross-Attention Routing Adapters (CARA) inject them into LLM layers 1, 3, 5 and 7. The visual tokens never enter the LLM's input sequence.
 
 Compared with prior slide-level MLLMs, this reduces inference TFLOPs by 97% and inference memory by 39%, with competitive results on WSI-Bench, Slide-Bench and Path-Bench.
 
@@ -157,21 +157,58 @@ PY
 
 The Qwen2.5-7B-Instruct base model is not included. It is downloaded from Hugging Face the first time it is needed, or you can set `LOCPATH_LLM_PATH` to a local copy.
 
+
+## Inference
+
+`scripts/test_vis_adapter.sh` runs distributed generation over every `*_test.json` file in a folder and writes one prediction per question.
+
+```bash
+export CHECKPOINT=/path/to/stage2_checkpoint.pth
+export DATA_DIR=/path/to/benchmark_json_dir      # folder with *_test.json
+export FEATURE_ROOT=/path/to/features/conch_v1
+export OUT_CSV=$PWD/results/predictions.csv
+export OUT_JSONL=$PWD/results/predictions.jsonl
+export NPROC_PER_NODE=4
+
+uv run bash scripts/test_vis_adapter.sh --sample_num 61440 --max_new_tokens 512
+```
+
+To evaluate the released weights on the released data:
+
+```bash
+export CONFIG=$PWD/xtuner/configs/vis_adapter/stage_2_vis_adapter_topk_anneal_longnet_ctx_language_add_router_kl_mass_l128.py
+export CHECKPOINT="$LOCPATH_MODEL_ROOT/checkpoints/stage2.pth"
+export DATA_DIR="$LOCPATH_DATA_ROOT/annotations/test/wsi_bench"
+export FEATURE_ROOT="$LOCPATH_FEATURE_ROOT"
+uv run --locked bash scripts/test_vis_adapter.sh \
+  --image_feature_suffix .npy --sample_num 61440 --router-top-m 96 --max_new_tokens 512
+```
+
+For BCNB, set `DATA_DIR=$LOCPATH_DATA_ROOT/annotations/test/external` and run the same command. The BCNB records point to CSV feature files under `FEATURE_ROOT`.
+
+A few things to keep in mind when running inference:
+
+- The checkpoint doesn't store the TIS's selection schedule, so add `--router-top-m 96` to get the budget we used in the paper.
+- The Stage 2 checkpoint is all you need on the LoC-Path side, since it already carries the visual weights. You still need the Qwen base model: point `LOCPATH_LLM_PATH` to a local copy, or let the script download `Qwen/Qwen2.5-7B-Instruct` from Hugging Face.
+- The config and the checkpoint must use the same L. If you leave `CONFIG` unset, the script falls back to the L = 256 config, which won't load the released L = 128 weights.
+- Other options include `--sample_num` (maximum tiles per slide), `--sample_strategy {linspace,random}` and `--decoding` (greedy by default). Set `CONFIG=...` to use a different config.
+
+
 ## Training
 
 Training has three stages. Each stage has a launcher in `scripts/` and a config in `xtuner/configs/`. The launchers use the L = 256 configs by default. To train the L = 128 model, set `CONFIG` to the matching `_l128` config for each stage, or set `STAGE1_CONFIG` and `STAGE2_CONFIG` for `train_stage1_stage2.sh`. First set the GPU layout:
 
 ```bash
-export NPROC_PER_NODE=4          # GPUs on this node
+export NPROC_PER_NODE=4          # GPUs on one node
 export NNODES=1 NODE_RANK=0 ADDR=127.0.0.1 PORT=29500
-export DEEPSPEED_CFG=$PWD/xtuner/configs/deepspeed/deepspeed_zero2.json   # ZeRO-2, as in the paper
+export DEEPSPEED_CFG=$PWD/xtuner/configs/deepspeed/deepspeed_zero2.json
 ```
 
 On a single GPU, set `NPROC_PER_NODE=1` and leave `DEEPSPEED_CFG` unset. Use `CUDA_VISIBLE_DEVICES` to pick devices. Any extra arguments to a launcher are passed on to `xtuner train`, e.g. `uv run --locked bash scripts/train_stage1.sh --seed 42`.
 
 The global batch size is `NPROC_PER_NODE × NNODES × batch per GPU × accumulative counts`. If you train on a different number of GPUs, change `ACCUMULATIVE_COUNTS` in the config so that the global batch size stays the same.
 
-### Stage 0: MAE resampler pretraining
+### MAE resampler pretraining
 
 The resampler is trained to compress tile features into 256 latents by reconstructing masked tiles (mask ratio 70%). Training runs for 100k iterations with AdamW (lr 1e-4, 3% warmup, cosine schedule), and Top-K is annealed from (128, 64) to (64, 32). Two extra losses are used: a coverage loss so that every tile is attended by some latent, and a diversity loss that keeps latents from collapsing onto each other.
 
@@ -187,7 +224,6 @@ Config: `xtuner/configs/mae_pretraining/mae_feature_pretrain_longnet_ctx_encoder
 
 ### Stage 1: alignment on reports
 
-The LLM and the resampler are frozen. The projector, TIS and CARA are trained on WSI-Bench reports for 3 epochs (lr 1e-4), and TIS learns from CARA's cross-attention by self-distillation.
 
 ```bash
 export LOCPATH_FEATURE_ROOT=/path/to/features/conch_v1
@@ -202,7 +238,6 @@ Config: `xtuner/configs/vis_adapter/stage_1_vis_adapter_topk_anneal_longnet_ctx_
 
 ### Stage 2: instruction tuning on VQA
 
-LoRA is added to the LLM, and the last resampler layer, the latent queries and the input projection are unfrozen. The model is trained on all WSI-Bench VQA pairs (lr 2e-5), with an additional pairwise ranking loss for TIS.
 
 ```bash
 export LOCPATH_FEATURE_ROOT=/path/to/features/conch_v1
@@ -231,45 +266,12 @@ uv run bash scripts/train_stage1_stage2.sh
 
 A run starts from scratch unless you pass `--resume /path/to/checkpoint`, or `--resume auto` to read `WORK_DIR/last_checkpoint`. Use a new `WORK_DIR` for each experiment.
 
-With DeepSpeed, a checkpoint is a directory whose name ends in `.pth`. Keep the whole directory if you want to resume from it. With ZeRO-1/2, the directory also contains `locpath_model.pth`, which has the LoRA weights and all visual weights, frozen ones included. That file is enough to start Stage 2 or to run inference, and the loader picks it up automatically when given the directory. Older ZeRO checkpoints without this file may lack the frozen visual weights. ZeRO-3 is not supported.
+With DeepSpeed, a checkpoint is a directory whose name ends in `.pth`. Keep the whole directory if you want to resume from it. With ZeRO-1/2, the directory also contains `locpath_model.pth`, which has the LoRA weights and all visual weights, frozen ones included. That file is enough to start Stage 2 or to run inference, and the loader picks it up automatically when given the directory. Older ZeRO checkpoints without this file may lack the frozen visual weights. ZeRO-3 is not compatible with 4-bit training, so it is not recommended.
 
 </details>
-
-## Inference
-
-`scripts/test_vis_adapter.sh` runs distributed generation over every `*_test.json` file in a folder and writes one prediction per question.
-
-```bash
-export CHECKPOINT=/path/to/stage2_checkpoint.pth
-export DATA_DIR=/path/to/benchmark_json_dir      # folder with *_test.json
-export FEATURE_ROOT=/path/to/features/conch_v1
-export OUT_CSV=$PWD/results/predictions.csv
-export OUT_JSONL=$PWD/results/predictions.jsonl
-export NPROC_PER_NODE=4
-
-uv run bash scripts/test_vis_adapter.sh --sample_num 61440 --max_new_tokens 512
-```
-
-To evaluate the released weights on the released data (NPY features):
-
-```bash
-export CONFIG=$PWD/xtuner/configs/vis_adapter/stage_2_vis_adapter_topk_anneal_longnet_ctx_language_add_router_kl_mass_l128.py
-export CHECKPOINT="$LOCPATH_MODEL_ROOT/checkpoints/stage2.pth"
-export DATA_DIR="$LOCPATH_DATA_ROOT/annotations/test/wsi_bench"
-export FEATURE_ROOT="$LOCPATH_FEATURE_ROOT"
-uv run --locked bash scripts/test_vis_adapter.sh \
-  --image_feature_suffix .npy --sample_num 61440 --router-top-m 96 --max_new_tokens 512
-```
-
-For BCNB, set `DATA_DIR=$LOCPATH_DATA_ROOT/annotations/test/external` and run the same command. The BCNB records point to CSV feature files under `FEATURE_ROOT`.
-
-The router schedule is not saved in the checkpoint, so pass `--router-top-m 96` to use the paper's final routing budget. The Stage 2 checkpoint already contains the visual weights, and inference does not need the MAE or Stage 1 checkpoints. It does need the Qwen base model: set `LOCPATH_LLM_PATH` to a local copy, otherwise `Qwen/Qwen2.5-7B-Instruct` is downloaded from Hugging Face. The config must have the same L as the checkpoint. Without `CONFIG`, the script uses the L = 256 Stage 2 config.
-
-Other options include `--sample_num` (maximum tiles per slide), `--sample_strategy {linspace,random}` and `--decoding` (greedy by default). Set `CONFIG=...` to use a different config.
-
 ## Evaluation
 
-`scripts/evaluate_predictions.sh` scores the prediction JSONL by task: morphological analysis, diagnosis, treatment planning and report generation on WSI-Bench, plus Slide-Bench/BCNB and Path-Bench. Closed-ended questions (multiple choice, true/false) are scored by accuracy. Open-ended questions are scored with WSI-Precision and WSI-Relevance, the LLM-as-judge metrics from WSI-LLaVA. We use their prompts without changes. Report generation is additionally scored with BLEU-1/2, ROUGE-L and METEOR.
+`scripts/evaluate_predictions.sh` scores predictions task by task on WSI-Bench (morphology, diagnosis, treatment planning, report generation), Slide-Bench/BCNB. Closed-ended questions are scored by accuracy. Open-ended answers are scored by an LLM judge with WSI-Precision and WSI-Relevance from [WSI-LLaVA](https://github.com/XinhengLyu/WSI-LLaVA), with their provided prompts and rubric. Report-generation tasks are also scored with traditional NLU metrics.
 
 The paper uses GPT-4o as the judge, with the API's default sampling settings:
 
@@ -323,7 +325,5 @@ Apache License 2.0. See [LICENSE](LICENSE). Third-party attributions are listed 
       year={2026},
       eprint={2512.05391},
       archivePrefix={arXiv},
-      primaryClass={cs.CV},
-      url={https://arxiv.org/abs/2512.05391},
 }
 ```
