@@ -269,6 +269,7 @@ A run starts from scratch unless you pass `--resume /path/to/checkpoint`, or `--
 With DeepSpeed, a checkpoint is a directory whose name ends in `.pth`. Keep the whole directory if you want to resume from it. With ZeRO-1/2, the directory also contains `locpath_model.pth`, which has the LoRA weights and all visual weights, frozen ones included. That file is enough to start Stage 2 or to run inference, and the loader picks it up automatically when given the directory. Older ZeRO checkpoints without this file may lack the frozen visual weights. ZeRO-3 is not compatible with 4-bit training, so it is not recommended.
 
 </details>
+
 ## Evaluation
 
 `scripts/evaluate_predictions.sh` scores predictions task by task on WSI-Bench (morphology, diagnosis, treatment planning, report generation), Slide-Bench/BCNB. Closed-ended questions are scored by accuracy. Open-ended answers are scored by an LLM judge with WSI-Precision and WSI-Relevance from [WSI-LLaVA](https://github.com/XinhengLyu/WSI-LLaVA), with their provided prompts and rubric. Report-generation tasks are also scored with traditional NLU metrics.
