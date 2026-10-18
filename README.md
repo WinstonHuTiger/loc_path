@@ -27,28 +27,20 @@ All stages train on GPUs with 24 GB of memory. Peak memory per GPU, measured on 
 | Stage 2 (instruction tuning) | the above, plus LLM LoRA and the last resampler layer | 2 × 16 | 16.8 GB |
 
 <details>
-<summary><b>Data loading</b></summary>
+<summary><b>Faster data loading</b></summary>
 
 <br>
 
-In our training runs, reading features from disk was a bigger bottleneck than GPU compute. Features and coordinates are stored as separate `.npy` files and opened with `np.load(..., mmap_mode='r')`, so only the sampled rows are read. When a slide has more tiles than the token budget, the sampler takes evenly spaced rows (`linspace`). Loaders that use `.pt` or `.h5` files read the whole file for every sample.
-
-The collate functions (`collate_feature_tokens` and `slidechat_feature_collate_fn`) pad each batch to its longest slide, up to 61,440 tokens, and pass a `vision_pad_mask` to the visual modules. Text is padded separately. This lets us put 2 slides on each GPU, while slide-level loaders usually handle one at a time.
-
-On our machines, these changes cut Stage 2 training from more than a day to under 20 hours, and made the other stages about 2–3× faster.
+Tile features were originally stored as `.h5` files, and reading them was the largest I/O cost in training. We convert the features to `.npy` and open them with memory mapping (`np.load(..., mmap_mode='r')`), so each sample reads only the rows it needs instead of the whole file. Together with padding and masking of slides of different lengths, which lets each GPU process more than one slide per step, this made training much faster: Stage 2 now finishes in under 20 hours instead of more than a day, and the other stages run about 2–3× faster.
 
 </details>
 
 <details>
-<summary><b>Memory use by stage</b></summary>
+<summary><b>Low memory by design</b></summary>
 
 <br>
 
-MAE pretraining does not involve the LLM. The model consists of 2 resampler layers (width 512, 256 latents) and a 2-layer cross-attention decoder that reconstructs tile features rather than pixels. The context encoder uses LongNet dilated attention (segments 1024/2048/4096), whose cost grows about linearly with the number of tiles. Each latent attends only to its Top-K tiles, with K annealed from (128, 64) to (64, 32). 70% of the tiles are masked, and the decoder reconstructs only those. Training runs in bf16.
-
-In Stage 1, Qwen2.5-7B-Instruct is frozen and loaded in 4-bit NF4 with bitsandbytes, so it needs no gradients or optimizer state. The resampler is also frozen, and only the projector, TIS and CARA are trained. The LLM sequence contains text only (at most 2,280 tokens). The visual latents, at most M of them, are seen through cross-attention in 4 layers instead of being appended to the sequence.
-
-Stage 2 adds LoRA (r = 128, α = 64) to all linear layers of the 4-bit LLM. It also unfreezes the last resampler layer, the latent queries and the input projection. The LLM uses FlashAttention-2, and DeepSpeed ZeRO-2 splits gradients and optimizer states across GPUs. The visual input is still reduced to M latents, so memory does not grow with slide size.
+Memory remains low because the model compresses the slide aggressively. STM merges neighboring tiles, the resampler reduces them to a fixed set of latents, and TIS keeps only the Top-M of those. Visual tokens are never added to the LLM's input sequence; the selected latents are injected through cross-attention in four LLM layers instead. The LLM is loaded in 4-bit and kept frozen, and the trainable parts are small: the projector, TIS and CARA in Stage 1, plus LoRA and the last resampler layer in Stage 2. As a result, memory does not grow with slide size, and every stage fits on a 24 GB GPU.
 
 </details>
 
@@ -132,8 +124,6 @@ We extracted CONCH-v1 features with one of two pipelines:
 |---|---|---|
 | [DSMIL](https://github.com/binli123/dsmil-wsi) | WSI → JPEG tiles → CONCH-v1 features | 224 × 224 tiles at 20×, no overlap, edge-response threshold 15 |
 | [TRIDENT](https://github.com/mahmoodlab/TRIDENT) | WSI → tissue segmentation → patch coordinates → CONCH-v1 features | HEST segmentation, 224 × 224 tiles at 20×, no overlap |
-
-For DSMIL we used modified versions of its tiler and of CLAM's feature extraction script, which are not included here. The two pipelines select tissue differently, so process training and test slides with the same one.
 
 Run CONCH v1 with the contrastive projection and output normalization turned off. This gives `[N, 512]` features. For training, store each slide as `*_features.npy` (fp16 or fp32) and `*_coords.npy` (fp32). Coordinates are zero-based tile-grid indices in `(x, y)` order, row-aligned with the features. DSMIL/CLAM writes scaled grid coordinates, while TRIDENT writes level-0 pixel coordinates, so convert them differently.
 
